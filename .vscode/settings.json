@@ -3,6 +3,11 @@
     "files.associations": {
         "matrix.h": "c",
         "stddef.h": "c",
-        "omp.h": "c"
+        "omp.h": "c",
+        "x86intrin.h": "c",
+        "random": "c",
+        "array": "c",
+        "string": "c",
+        "string_view": "c"
     }
 }

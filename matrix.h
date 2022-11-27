@@ -26,15 +26,14 @@ struct Matrix *copy_mat(const struct Matrix *source, struct Matrix *dest);
 void inverse(struct Matrix *a);
 struct Matrix *add_mat(const struct Matrix *a, const struct Matrix *b, struct Matrix *ans);         //ans=a+b
 struct Matrix *sub_mat(const struct Matrix *a, const struct Matrix *b, struct Matrix *ans);         //ans=a-b
-struct Matrix *mul_mat(const struct Matrix *a, const struct Matrix *b, struct Matrix *ans);         //ans=a*b,plain_version
+struct Matrix *mul_plain(const struct Matrix *a, const struct Matrix *b, struct Matrix *ans);         //ans=a*b,plain_version
 struct Matrix *mul_ikj(const struct Matrix *a, const struct Matrix *b, struct Matrix *ans);         //寻址优化
-struct Matrix *mul_avx(const struct Matrix *a, const struct Matrix *b, struct Matrix *ans);         //avx指令集
-struct Matrix *mul_unroll(const struct Matrix *a, const struct Matrix *b, struct Matrix *ans);      //unroll
-struct Matrix *mul_block(const struct Matrix *a, const struct Matrix *b, struct Matrix *ans);       //分治
-struct Matrix *mul_omp(const struct Matrix *a, const struct Matrix *b, struct Matrix *ans);         //omp+block
-struct Matrix *mul_strassen(const struct Matrix *a, const struct Matrix *b, struct Matrix *ans);    //strassen,会丢精度，不是omp的问题
-
-struct Matrix *mul_improved(const struct Matrix *a, struct Matrix *b,struct Matrix *ans);           //转置优化无损乘
+struct Matrix *mul_avx(const struct Matrix *a, struct Matrix *b, struct Matrix *ans);         //avx指令集
+//调用此后的功能请确保矩阵大小是2的整数次方（其实能整除八就行）
+//可以在 matrix.c中调整defined ROLL实现其他大小循环展开
+struct Matrix *mul_unroll(const struct Matrix *a, struct Matrix *b, struct Matrix *ans);      //unroll
+struct Matrix *mul_omp(const struct Matrix *a, struct Matrix *b, struct Matrix *ans);         //omp
+struct Matrix *mul_strassen(const struct Matrix *a, struct Matrix *b, struct Matrix *ans, size_t size);    //strassen,会丢精度，不是omp的问题
 
 //project3的任务，但是在这里是石山
 struct Matrix *addScaler(const float num, const struct Matrix *used, struct Matrix *ans);

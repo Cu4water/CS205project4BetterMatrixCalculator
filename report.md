@@ -1,107 +1,107 @@
-# CS205 C/C++ Programming Report Of Project 3
+# CS205 C/C++ Programming Report Of Project 4
 
 
 **Name:** 杨博乔  
 **SID:** 12112805  
-## Part 1. analysis  
-> 题目需要仅用C设计一个矩阵类，重点要易用而非效率，因此，需要强大的鲁棒性
+## Part 1. analysis
+因为是基于project3的，本次project进行了以下优化（上次没实现的
 
-显然，用户可能出错的大抵是不可计算，或指针错误这两种情况，指针错误是无法鉴别的（仅限于把int指针当一个matrix指针传到函数里），但是指针是NULL这种问题可以由开发者来帮助用户解决。  
-此外，由于人对于指针的掌握程度是具有顺序的，因此对于参数都能传成NULL的用户，二级指针是可怕的，我使用特殊的回传参数避免了这个问题。  
+1. 使用 size_t 而非 int 进行位置的读取&存储
+2. 矩阵硬拷贝使用了memcpy函数而非手动遍历
+3. 处理了一些可能由我自己导致的内存泄漏的地方
+4. 限制用户必须全部使用指针
+
+本次题目需求：首先写一个较劣的朴素乘法，接下来使用**复杂度更优的算法**，**SIMD和openMP等降低常数的手段**进行优化，并在一些矩阵大小下与**openblas**库比较速度。
+
+本次测试基于intel的x86指令集，运行于内存16G的arch linux上。多数时候使用了<sys/time.h>的gettimeofday，因为可以读取微秒级别差异，但是对于多线程失效。
+
+该project实现了任意大小的矩阵乘法，但本文为了便于解释，假设为**n阶方阵**，希望读者能更好的理解。
+
+对于优化部分：
+### 裸的矩阵乘
+```cpp
+for(int i=0;i<n;++i)
+    for(int j=0;j<n;++j)
+        for(int k=0;k<n;++k)
+            C[i][j]+=A[i][k]*B[k][j];
+```
+显然对于缓存命中这是不好的，因为内存不连续。为了加速，就要尽可能使内存访问连续，即不要跳来跳去。
+原理是探针去内存中取值时，会尝试把附近的元素也扔进cache,然后会优先在cache中寻找再去访问内存。
+因此，让c和b的读更连续是好的，这一点我将在接下来的转置优化部分提到。
+变换循环顺序为i,k,j是最快的，伪代码如下
+
+### mul_ikj
+```cpp
+for(int i=0;i<n;++i)
+    for(int k=0;k<n;++k)
+        s=A[i][k];
+        for(int j=0;j<n;++j)
+            C[i][j]+=s*B[k][j];
+```
+容易发现它尽可能连续了。
+定性分析：假设对于连续内存，访问时不跳，记**跳跃数J**为探针发现缓存里没有去内存找的次数
+则对于以下循环顺序
+```
+ikj: T(n*n)
+kij: T(2*n*n)
+ijk: T(n*n*n+n*n-n)
+jik: T(n*n*n+n*n+n)
+kji: T(2n*n*n)
+jki: T(2n*n*n+n*n)
+```
+对于测试1024阶方阵，开O3，ikj的速度(852.3ms)较jki的速度(18005.2ms)提升了约20倍，猜测是聪明的编译器帮助优化了慢的那个。
+
+接下来是SIMD优化，这里进行了矩阵转置，使用了 **__mm256** 来进行八位浮点数的一次向量化，并单个的处理了后续部分，此外，该算法先将b转置再乘，常数更小了。
+因为转置是n方的嘛，n上了千这玩意的浪费就可以忽略不计了，此外，‘写’操作不需要考虑缓存命中，所以只要连续读就可以啦。
+曾经的伪代码：
+```cpp
+c[i][j]=a[i][]*b[][j];
+```
+连续的b访问飞快，而经过转置的b则对于原乘法可表示为
+```cpp
+c[i][j]=a[i][]*b[j][];
+```
+因此我们可以直接对这两个向量进行向量点乘扔给c,这个过程可以被SIMD并行，**请在支持AVX的CPU中使用，当然改成NEON也就稍微自己改下指令就行（逃**
+
+这个过程中会出问题，就是并行的寄存器跑不完，后面单独处理一下就可以了（详见part2）
+
+### 然后是基于上一部分简单的循环展开
+令人疑惑的是，对于1024k阶方阵，对于编译器优化开关，-O比上一版本快了10.3%，而 -O3 却比上一个版本（也是O3）慢了0.12%，具体时间结果在part3
+
+###然后是omp展开循环到多线程
+这个导致我gettimeofday坏了，跑出来负数了（逃），只能手动秒表，因此没有小数据，这个和带着openblas的都没有4k以下的小数据。
+
+### 最后是strassen优化，考虑分治但实际作用不大，因为有进出栈过程容易常数暴毙（实际上也是，使用了block的方法几乎没有对于上一种的优化，哪怕开了O3）
+
+这个是对于算法复杂度的优化，对于n阶方阵，其时间复杂度为O(pow(n,2.8))，stl库说得好，数据小可以尝试复杂度更小的暴力，因此经过试验，对于128以下的分治出来的矩阵，直接走寻址优化返回，（因为多线程会导致错误结果，写保护又失去了多线程的意义。
 
 ## Part 2. code
 
+坏了要写不完了
 ```cpp
-struct Matrix *addMatrix(const struct Matrix *a, const struct Matrix *b, struct Matrix *ans);       //ans=a+b
-```
-这段代码会将ans作为返回值，对于错误的输入，则会返回NULL,其实现是  
-```cpp
-struct Matrix *addMatrix(const struct Matrix *a, const struct Matrix *b, struct Matrix *ans) {
-    deleteMatrix(ans);
-    ans = (struct Matrix *) malloc ( sizeof( struct Matrix ) );
-    if(a == NULL || b == NULL) return NULL;
-    if( a -> row != b -> row || a -> col != b -> col ) return NULL;
-    createMatrix(a -> row, a -> col, ans);
-    for(int r=1; r<=ans -> row; r++) {
-        for(int c=1; c<=ans -> col; c++) {
-            setNum(ans, getNum(a, r, c) + getNum(b, r, c), r, c);
-        }
-    }
-    return ans;
-}
-```
-同理，对于标量计算，我们有（这里仍以加法为例）  
-```cpp
-struct Matrix *addScaler(const float num, const struct Matrix *used, struct Matrix *ans) {
-    if(used == NULL) return NULL;
-    ans = (struct Matrix *) malloc ( sizeof( struct Matrix ) );
-    copyMatrix(used, ans);
-    for(int r=1; r<=ans -> row; r++) {
-        for(int c=1; c<=ans -> col; c++) {
-            setNum(ans, getNum(ans, r, c) + num, r, c);
-        }
-    }
-    return ans;
-}
-```  
-  
-其余计算部分代码类似，Matrix结构的实现为
-```cpp
-struct Matrix{
-    int row,col;// 我们使用了[0,0]~[row-1,col-1]的内存，您可以调用[1,1]~[row,col]的数据,请使用get和set
-    float *data;
-};
-```
-矩阵的生成与释放
-```cpp
-void createMatrix(const int row, const int col, struct Matrix *used) {
-    if( row <= 0 || col <= 0) return;
-    if(used == NULL) return;
-    used -> col = col;
-    used -> row = row;
-    used -> data = (float *) malloc( sizeof(float) * row * col );
-}
-void deleteMatrix(struct Matrix *used) {
-    if(used == NULL) return;
-    free(used -> data);//由于需要用到used域中的东西，所以需要预处理NULL
-    free(used);
-}
-struct Matrix *copyMatrix(const struct Matrix *source, struct Matrix *dest) {
-    if(source == NULL || dest == NULL) return NULL;
-    deleteMatrix(dest);
-    createMatrix(source -> row, source -> col, dest);
-    for(int r=1; r<=source -> row; r++) {
-        for(int c=1; c<=source -> col; c++){
-            setNum(dest, getNum(source, r, c), r, c);
-        }
-    }
-    return dest;
-}
-```
-get和set
-```cpp
-int getPosition(const struct Matrix *now_used, const int row, const int col) {
-    return (now_used -> col) * (row - 1) + col - 1;
-}
+struct Matrix *mul_plain(const struct Matrix *a, const struct Matrix *b, struct Matrix *ans);         //ans=a*b,plain_version
+struct Matrix *mul_ikj(const struct Matrix *a, const struct Matrix *b, struct Matrix *ans);         //寻址优化
+struct Matrix *mul_avx(const struct Matrix *a, struct Matrix *b, struct Matrix *ans);         //avx指令集
+//调用此后的功能请确保矩阵大小是2的整数次方（其实能整除八就行）
+//可以在 matrix.c中调整defined ROLL实现其他大小循环展开
+struct Matrix *mul_unroll(const struct Matrix *a, struct Matrix *b, struct Matrix *ans);      //unroll
+struct Matrix *mul_omp(const struct Matrix *a, struct Matrix *b, struct Matrix *ans);         //omp
+struct Matrix *mul_strassen(const struct Matrix *a, struct Matrix *b, struct Matrix *ans, size_t size);    //strassen,会丢精度，不是omp的问题
 
-float getNum(const struct Matrix *now_used, const int row, const int col) {
-    if( row > ( now_used -> row ) || col > ( now_used -> col ) || row <= 0 || col <= 0 ) return 0.0;
-    return now_used -> data[ getPosition (now_used, row, col) ];
-}
-void setNum(struct Matrix *now_used, const float num, const int row, const int col) {
-    if( row > (now_used -> row) || col > (now_used -> col) || row<=0 || col<=0 ) return ;
-    now_used -> data[ getPosition (now_used, row, col) ]=num;
-}
 ```
-请注意，头文件中并未提供getPosition的定义，因为getPosition需要先**确认位置合法**  
-此外，请注意矩阵求最大最小值，我为节省空间，采用了类似strlen的处理，其复杂度为r*c,请尽可能减少这个函数的使用  
 
 ## Part 3. Result
-我留了一份示例代码在main.c中，您可以通过gcc编译器或我提供的makefile运行main.c
-> a=b=[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]的4x4矩阵  
-> 输出为a, a+b, a-b, a*b, a*2, max(a*b)
+    规模，strassen, openblas
+
+    4k*4k 7.2 0.65
+
+    8k*8k 57.7 4.32
+
+    16k*16k 460.8 33.7
+
+    32k*32k 5068.8 269.5
 
 ## Part 4. Difficulties & Solutions
-处理内存泄漏与用户可能提供的奇形怪状指针：本次project采取了特殊的函数返回值，即函数返回了一个传入的指针参数，这同时避免了对指针不熟练的其他开发人员使用二极指针这样 “艰难困苦” 的东西，也能有效处理用户乱传的如NULL指针（毕竟返回NULL就是有问题嘛），此外，对于所以函数中可能改变指针的一切操作，都会提前free/delete,杜绝除了用户作死（例如传了个常量NULL进去，这没救的）外的一切内存泄漏。  
-本次project的鲁棒性也高到了，即使传入一个NULL作为结果指针，仍然不会段错误并且输出正确结果，原理是将用户可能遗忘或用混的malloc大量应用在函数中，尽可能的提高了鲁棒性（例如，main.c中的第二组输出）  
-虽然，本次project也有不足之处，本来想着显卡加速矩阵乘，但是太忙，就没做。
+1. strassen的精度损失来源于多次加减法，如果是无损数据类型就可以了，比如int
+
+2. openblas好快，我优化了200倍，这玩意还比我快接近十倍，绝望qwq
