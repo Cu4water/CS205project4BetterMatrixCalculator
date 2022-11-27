@@ -1,0 +1,8 @@
+{
+    "C_Cpp.errorSquiggles": "Enabled",
+    "files.associations": {
+        "matrix.h": "c",
+        "stddef.h": "c",
+        "omp.h": "c"
+    }
+}
